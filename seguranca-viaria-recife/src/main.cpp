@@ -1,7 +1,7 @@
 /*
  * Projeto 6 - Grupo 3 | Modulo veicular de alerta
  *
- * Potenciometro: GPIO4
+ * Potenciometro: GPIO34
  * Buzzer: GPIO18
  * LED verde: GPIO25
  * LED amarelo: GPIO26
@@ -9,7 +9,7 @@
  */
 #include <Arduino.h>
 
-#define PIN_POT          4
+#define PIN_POT          34
 #define PIN_BUZZER       18
 #define PIN_LED_VERDE    25
 #define PIN_LED_AMARELO  26
