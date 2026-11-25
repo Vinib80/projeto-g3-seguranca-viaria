@@ -1,0 +1,4 @@
+[
+  {"id":"trecho-sul","lat":-8.0620,"lon":-34.8829,"raio_m":150,"risco":"alto","horas":[],"vel_segura":30},
+  {"id":"trecho-norte","lat":-8.0545,"lon":-34.8829,"raio_m":200,"risco":"medio","horas":[17,18,19],"vel_segura":40}
+]

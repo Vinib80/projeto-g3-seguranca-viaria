@@ -1,0 +1,19 @@
+# Sobe o broker MQTT e a API mock no seu PC:
+#   cd infra && docker compose up
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"   # ESP32
+      - "9001:9001"   # painel (WebSocket)
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  api-mock:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./api-mock:/app
+    command: sh -c "pip install -q -r requirements.txt && uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
