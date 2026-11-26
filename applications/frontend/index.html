@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Módulo veicular · G3</title>
+<!-- Dashboard do módulo veicular. Segue contratos.md: lê os trechos da API (seção 1),
+     mostra a telemetria MQTT ao vivo (seções 2 e 4) e manda comandos ao módulo (seção 3).
+     Nada é gravado. Arquivo único: abra direto no navegador, sem build. -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --fundo: #f4f3f0; --painel: #fff; --borda: #e2e0da; --texto: #1c1d1f; --texto-2: #5c5a55;
+    --topo: #1c1e22; --foco: #1c5cab; --azul: #1c5cab;
+    --verde: #1f9d55; --amarelo: #f2b705; --vermelho: #c62828;
+    --risco-alto: #a50f15; --risco-medio: #f07c0e; --risco-baixo: #d4a800;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--texto); background: var(--fundo); }
+  :focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+  header { background: var(--topo); color: #fff; padding: .9rem 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header b { font-size: 1.1rem; }
+  .selo { font: 600 .7rem/1 var(--mono); background: #3a3d44; color: #d6d6d6; padding: .3rem .45rem; border-radius: 4px; }
+  main { max-width: 1300px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1 { font-size: 1.8rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+  .sub { color: var(--texto-2); margin: 0; font-size: .92rem; }
+  .cartao { background: var(--painel); border: 1px solid var(--borda); border-radius: 10px; padding: 1.1rem 1.25rem; min-width: 0; }
+  .cabeca { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: flex-end; }
+  .estados { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+  .conexao { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; }
+  .conexao::before { content: ""; width: .6rem; height: .6rem; border-radius: 50%; background: #9a9a9a; }
+  .conexao.ok::before { background: var(--verde); }
+  .conexao.erro::before { background: var(--vermelho); }
+
+  .topo { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.25rem; margin-top: 1.25rem; }
+  .semaforo { display: flex; flex-direction: column; align-items: center; gap: .7rem; background: #23262b; border-radius: 14px; padding: 1.2rem; }
+  .semaforo i { width: 64px; height: 64px; border-radius: 50%; background: #3a3d44; transition: background .2s, box-shadow .2s; }
+  .semaforo i.on.verde { background: var(--verde); box-shadow: 0 0 22px var(--verde); }
+  .semaforo i.on.amarelo { background: var(--amarelo); box-shadow: 0 0 22px var(--amarelo); }
+  .semaforo i.on.vermelho { background: var(--vermelho); box-shadow: 0 0 22px var(--vermelho); }
+  .semaforo b { color: #fff; font: 700 1.05rem var(--mono); text-transform: uppercase; }
+  .leituras { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+  .kpi span { display: block; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--texto-2); }
+  .kpi strong { display: block; font: 700 1.9rem/1.15 var(--mono); overflow-wrap: anywhere; }
+  .kpi small { color: var(--texto-2); }
+  .direita { display: grid; gap: 1.25rem; min-width: 0; }
+  .comandos { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .4rem; }
+  button { font: inherit; padding: .45rem .9rem; border: 1px solid var(--topo); background: var(--topo); color: #fff; border-radius: 6px; cursor: pointer; }
+  button.sec { background: #fff; color: var(--texto); border-color: var(--borda); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .grade2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1.25rem; margin-top: 1.25rem; }
+  #mapa { height: 440px; border-radius: 8px; border: 1px solid var(--borda); }
+  #grafico { width: 100%; height: 120px; display: block; }
+  #log { font: .82rem/1.5 var(--mono); max-height: 220px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  #log li { padding: .25rem 0; border-bottom: 1px solid #efede8; overflow-wrap: anywhere; }
+  .config { display: grid; gap: .5rem; margin-top: .6rem; font-size: .85rem; }
+  .config label { display: grid; gap: .2rem; color: var(--texto-2); }
+  .config input { font: .85rem var(--mono); padding: .4rem .5rem; border: 1px solid var(--borda); border-radius: 6px; min-width: 0; }
+  .linha { display: flex; gap: .5rem; flex-wrap: wrap; }
+  dl { margin: .4rem 0 0; display: grid; grid-template-columns: auto 1fr; gap: .35rem .8rem; font-size: .9rem; }
+  dt { font-weight: 600; display: flex; align-items: center; gap: .4rem; }
+  dd { margin: 0; color: var(--texto-2); }
+  .bolinha { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; }
+  code { font: .85em var(--mono); background: #efede8; padding: .05rem .3rem; border-radius: 4px; }
+  footer { max-width: 1300px; margin: 0 auto; padding: 0 1.25rem 2rem; font-size: .8rem; color: var(--texto-2); }
+
+  @media (max-width: 900px) {
+    .topo, .grade2 { grid-template-columns: minmax(0, 1fr); }
+    .leituras { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .semaforo { flex-direction: row; justify-content: center; }
+    #mapa { height: 340px; }
+  }
+</style>
+</head>
+<body>
+<header><b>Módulo veicular</b><span class="selo">PROJETO 6 · G3</span></header>
+
+<main>
+  <div class="cabeca">
+    <div>
+      <h1>Módulo ao vivo</h1>
+      <p class="sub">ESP32 + GPS + velocidade: alerta o motorista num trecho de risco acima da velocidade segura.
+        Telemetria recebida via MQTT (<code>contratos.md</code>); nada é gravado por este painel.</p>
+    </div>
+    <div class="estados">
+      <span class="conexao" id="st-broker" aria-live="polite">broker: desconectado</span>
+      <span class="conexao" id="st-modulo" aria-live="polite">módulo: sem status</span>
+    </div>
+  </div>
+
+  <div class="topo">
+    <div class="semaforo" aria-live="polite" aria-label="Nível de alerta atual">
+      <i class="vermelho"></i><i class="amarelo"></i><i class="verde"></i>
+      <b id="nivel">aguardando</b>
+    </div>
+    <div class="direita">
+      <div class="leituras">
+        <div class="cartao kpi"><span>Velocidade</span><strong id="vel">–</strong><small>km/h</small></div>
+        <div class="cartao kpi"><span>Trecho</span><strong id="trecho" style="font-size:1.25rem">–</strong><small id="trecho-sub">fora de trecho de risco</small></div>
+        <div class="cartao kpi"><span>Vel. segura</span><strong id="segura">–</strong><small>km/h no trecho</small></div>
+        <div class="cartao kpi"><span>Última msg</span><strong id="ultima" style="font-size:1.25rem">–</strong><small id="ultima-sub">nenhuma</small></div>
+      </div>
+      <div class="cartao">
+        <h2>Comandos para o módulo</h2>
+        <p class="sub">Publica em <code id="t-comando">cttu/modulo/01/comando</code> (contratos.md, seção 3).</p>
+        <div class="comandos">
+          <button type="button" data-acao="silenciar" disabled>Silenciar bipe</button>
+          <button type="button" data-acao="ativar_som" disabled>Ativar bipe</button>
+          <button type="button" data-acao="atualizar_trechos" class="sec" disabled>Atualizar trechos</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grade2">
+    <div class="cartao">
+      <h2>Posição</h2>
+      <p class="sub">Trechos de risco da API (cor = risco) e o trajeto recebido nesta sessão.</p>
+      <div id="mapa" role="region" aria-label="Mapa com a posição do módulo e os trechos de risco"></div>
+    </div>
+    <div class="direita">
+      <div class="cartao">
+        <h2>Velocidade (últimos 2 min)</h2>
+        <svg id="grafico" viewBox="0 0 300 120" preserveAspectRatio="none" role="img" aria-label="Velocidade recente"></svg>
+      </div>
+      <div class="cartao">
+        <h2>Eventos</h2>
+        <ul id="log"><li>Nenhuma mensagem ainda. Ligue o módulo, rode o Wokwi ou <code>infra/simular_modulo.py</code>.</li></ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="grade2">
+    <div class="cartao">
+      <h2>Como o módulo decide</h2>
+      <dl>
+        <dt><span class="bolinha" style="background:var(--verde)"></span>Verde</dt><dd>fora de trecho de risco (ou fora do horário dele)</dd>
+        <dt><span class="bolinha" style="background:var(--amarelo)"></span>Amarelo</dt><dd>dentro do trecho, até a velocidade segura</dd>
+        <dt><span class="bolinha" style="background:var(--vermelho)"></span>Vermelho</dt><dd>dentro do trecho, acima da velocidade segura (LED + bipe)</dd>
+      </dl>
+    </div>
+    <div class="cartao">
+      <h2>Conexão</h2>
+      <div class="config">
+        <label>Broker MQTT (WebSocket)
+          <input id="cfg-broker" spellcheck="false"></label>
+        <label>API dos trechos
+          <input id="cfg-api" spellcheck="false"></label>
+        <label>Módulo
+          <input id="cfg-modulo" spellcheck="false" style="max-width:6rem"></label>
+        <div class="linha">
+          <button id="conectar" type="button">Conectar</button>
+          <button id="preset-local" type="button" class="sec">Docker local</button>
+          <button id="preset-hivemq" type="button" class="sec">HiveMQ público</button>
+        </div>
+        <p class="sub">Docker local = <code>infra/docker-compose.yml</code> (WebSocket na 9001). HiveMQ é o broker
+          padrão do <code>config.h</code> (Wokwi): público e sem senha, só para demonstração.</p>
+      </div>
+    </div>
+  </div>
+</main>
+<footer>Dado do Wokwi ou do simulador é bancada (velocidade do potenciômetro), não medição de rua.</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const PRESETS = {
+  local: { broker: "ws://localhost:9001", api: "http://localhost:8000/modulo/trechos" },
+  hivemq: { broker: "wss://broker.hivemq.com:8884/mqtt", api: "http://localhost:8000/modulo/trechos" },
+};
+const COR_RISCO_HEX = { alto: "#a50f15", medio: "#f07c0e", baixo: "#d4a800" };
+const NIVEIS = ["verde", "amarelo", "vermelho"];
+
+// Config: ?broker=&api=&modulo= na URL > último valor salvo > Docker local.
+function lerConfig() {
+  let salvo = {};
+  try { salvo = JSON.parse(localStorage.getItem("g3-dashboard") || "{}"); } catch {}
+  const q = new URLSearchParams(location.search);
+  return {
+    broker: q.get("broker") || salvo.broker || PRESETS.local.broker,
+    api: q.get("api") || salvo.api || PRESETS.local.api,
+    modulo: q.get("modulo") || salvo.modulo || "01",
+  };
+}
+function preencher(c) { $("#cfg-broker").value = c.broker; $("#cfg-api").value = c.api; $("#cfg-modulo").value = c.modulo; }
+function configAtual() {
+  const c = { broker: $("#cfg-broker").value.trim(), api: $("#cfg-api").value.trim(), modulo: $("#cfg-modulo").value.trim() || "01" };
+  try { localStorage.setItem("g3-dashboard", JSON.stringify(c)); } catch {}
+  return c;
+}
+
+// ---------- log ----------
+let logVazio = true;
+function registrar(txt) {
+  if (logVazio) { $("#log").innerHTML = ""; logVazio = false; }
+  const li = document.createElement("li");
+  li.textContent = `${new Date().toLocaleTimeString("pt-BR")}  ${txt}`;
+  $("#log").prepend(li);
+  while ($("#log").children.length > 60) $("#log").lastChild.remove();
+}
+
+// ---------- mapa e trechos ----------
+const mapa = L.map("mapa").setView([-8.058, -34.883], 14);
+L.tileLayer("https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+  maxZoom: 19,
+}).addTo(mapa);
+const camadaTrechos = L.layerGroup().addTo(mapa);
+const rastro = L.polyline([], { color: "#1c5cab", weight: 3 }).addTo(mapa);
+let marca = null, trechos = [];
+
+function horasTxt(h) { return !h || !h.length ? "o dia todo" : h.map(x => `${x}h`).join(", "); }
+
+async function carregarTrechos(url) {
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const lista = await r.json();
+    if (!Array.isArray(lista)) throw new Error("resposta não é uma lista");
+    trechos = lista;
+    camadaTrechos.clearLayers();
+    trechos.forEach(t => L.circle([t.lat, t.lon], { radius: t.raio_m, color: COR_RISCO_HEX[t.risco] || "#555", weight: 1.5, fillOpacity: .2 })
+      .bindTooltip(`<b>${t.id}</b><br>risco ${t.risco} · ${t.vel_segura} km/h<br>${horasTxt(t.horas)}`)
+      .addTo(camadaTrechos));
+    if (trechos.length) mapa.fitBounds(L.featureGroup(camadaTrechos.getLayers()).getBounds(), { padding: [30, 30] });
+    registrar(`API: ${trechos.length} trechos carregados`);
+  } catch (e) {
+    registrar(`API: não carregou os trechos (${e.message}). O mapa segue sem eles.`);
+  }
+}
+
+// ---------- gráfico ----------
+const serie = [];  // [ms, vel]
+function desenharGrafico() {
+  const agora = Date.now(), janela = 120000;
+  while (serie.length && agora - serie[0][0] > janela) serie.shift();
+  const max = Math.max(60, ...serie.map(p => p[1]));
+  const pts = serie.map(([t, v]) => `${(300 - (agora - t) / janela * 300).toFixed(1)},${(115 - v / max * 110).toFixed(1)}`).join(" ");
+  const t = trechoAtual && trechos.find(x => x.id === trechoAtual);
+  const ySeg = t ? (115 - t.vel_segura / max * 110).toFixed(1) : null;
+  $("#grafico").innerHTML =
+    (ySeg ? `<line x1="0" x2="300" y1="${ySeg}" y2="${ySeg}" stroke="#c62828" stroke-dasharray="4 3" stroke-width="1" vector-effect="non-scaling-stroke"/>` : "") +
+    `<polyline points="${pts}" fill="none" stroke="#1c5cab" stroke-width="2" vector-effect="non-scaling-stroke"/>` +
+    `<text x="4" y="12" font-size="10" fill="#5c5a55">${max} km/h</text>`;
+}
+
+// ---------- telemetria ----------
+let ultimoNivel = null, trechoAtual = null;
+function mostrarNivel(nivel) {
+  document.querySelectorAll(".semaforo i").forEach(i => i.classList.toggle("on", i.classList.contains(nivel)));
+  $("#nivel").textContent = nivel || "aguardando";
+  if (nivel && nivel !== ultimoNivel) registrar(`alerta ${nivel}`);
+  ultimoNivel = nivel;
+}
+
+function aoTelemetria(m) {
+  if (NIVEIS.includes(m.alerta)) mostrarNivel(m.alerta);
+  const vel = Number(m.vel_kmh);
+  if (Number.isFinite(vel)) { $("#vel").textContent = Math.round(vel); serie.push([Date.now(), vel]); }
+  if (m.trecho_id !== trechoAtual) registrar(m.trecho_id ? `entrou em ${m.trecho_id}` : `saiu de ${trechoAtual}`);
+  trechoAtual = m.trecho_id || null;
+  const t = trechos.find(x => x.id === trechoAtual);
+  $("#trecho").textContent = trechoAtual || "–";
+  $("#trecho-sub").textContent = t ? `risco ${t.risco} · ${horasTxt(t.horas)}` : (trechoAtual ? "trecho fora da lista da API" : "fora de trecho de risco");
+  $("#segura").textContent = t ? t.vel_segura : "–";
+  // ts = 0: módulo sem NTP; usa a hora de chegada (contratos.md, esclarecimentos).
+  const quando = m.ts ? new Date(m.ts * 1000) : new Date();
+  $("#ultima").textContent = quando.toLocaleTimeString("pt-BR");
+  $("#ultima-sub").textContent = m.ts ? "hora do módulo" : "hora de chegada (módulo sem NTP)";
+  const lat = Number(m.lat), lon = Number(m.lon);
+  if (m.lat != null && Number.isFinite(lat) && Number.isFinite(lon)) {
+    if (!marca) marca = L.circleMarker([lat, lon], { radius: 8, color: "#fff", weight: 2, fillColor: "#1c5cab", fillOpacity: 1 }).addTo(mapa);
+    marca.setLatLng([lat, lon]);
+    rastro.addLatLng([lat, lon]);
+    if (rastro.getLatLngs().length > 600) rastro.setLatLngs(rastro.getLatLngs().slice(-600));
+  }
+  desenharGrafico();
+}
+
+function statusModulo(txt) {
+  const st = $("#st-modulo");
+  st.className = "conexao " + (txt === "online" ? "ok" : "erro");
+  st.textContent = `módulo: ${txt}`;
+  registrar(`módulo ${txt}`);
+}
+
+// ---------- MQTT ----------
+let cliente = null, base = "";
+function botoes(ativos) { document.querySelectorAll("[data-acao]").forEach(b => b.disabled = !ativos); }
+
+function conectar() {
+  const c = configAtual();
+  base = `cttu/modulo/${c.modulo}`;
+  $("#t-comando").textContent = `${base}/comando`;
+  carregarTrechos(c.api);
+  if (cliente) cliente.end(true);
+  botoes(false);
+  const st = $("#st-broker");
+  st.className = "conexao"; st.textContent = "broker: conectando…";
+  if (!window.mqtt) { st.className = "conexao erro"; st.textContent = "broker: biblioteca MQTT não carregou"; return; }
+  cliente = mqtt.connect(c.broker, { clientId: "painel-g3-" + Math.random().toString(16).slice(2, 10), reconnectPeriod: 5000, connectTimeout: 8000 });
+  cliente.on("connect", () => {
+    st.className = "conexao ok"; st.textContent = `broker: ${new URL(c.broker).host}`;
+    cliente.subscribe([`${base}/telemetria`, `${base}/status`]);
+    botoes(true);
+    registrar(`conectado, ouvindo ${base}/telemetria e /status`);
+  });
+  cliente.on("message", (topico, buf) => {
+    const txt = buf.toString();
+    if (topico.endsWith("/status")) return statusModulo(txt.trim());
+    try { const m = JSON.parse(txt); if (m && typeof m === "object") aoTelemetria(m); }
+    catch { registrar(`mensagem inválida em ${topico}: ${txt.slice(0, 60)}`); }
+  });
+  cliente.on("error", e => { st.className = "conexao erro"; st.textContent = `broker: erro (${e.message})`; });
+  cliente.on("offline", () => { st.className = "conexao erro"; st.textContent = "broker: sem conexão, tentando de novo…"; botoes(false); });
+}
+
+document.querySelectorAll("[data-acao]").forEach(b => b.addEventListener("click", () => {
+  if (!cliente || !cliente.connected) return;
+  cliente.publish(`${base}/comando`, JSON.stringify({ acao: b.dataset.acao }), { qos: 1 });
+  registrar(`→ comando ${b.dataset.acao}`);
+  if (b.dataset.acao === "atualizar_trechos") carregarTrechos(configAtual().api);
+}));
+$("#conectar").addEventListener("click", conectar);
+$("#preset-local").addEventListener("click", () => { preencher({ ...PRESETS.local, modulo: $("#cfg-modulo").value }); conectar(); });
+$("#preset-hivemq").addEventListener("click", () => { preencher({ ...PRESETS.hivemq, modulo: $("#cfg-modulo").value }); conectar(); });
+setInterval(desenharGrafico, 1000);
+
+preencher(lerConfig());
+conectar();
+</script>
+</body>
+</html>

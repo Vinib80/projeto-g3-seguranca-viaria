@@ -11,9 +11,12 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 ARQUIVO = Path(__file__).with_name("trechos.json")
 app = FastAPI(title="API mock - Projeto 6 G3")
+# O dashboard (applications/frontend) roda em outra origem e lê /modulo/trechos pelo navegador.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"])
 
 
 @app.get("/modulo/trechos")
