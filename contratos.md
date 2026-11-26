@@ -50,6 +50,19 @@ Regra: o dia da semana não entra no MVP. A API entrega só o que está ativo.
 | trecho_id | string ou null | trecho em que o veículo está; null se estiver fora |
 | alerta | string | "verde" (fora), "amarelo" (dentro do trecho), "vermelho" (dentro e acima de vel_segura) |
 
+## 3. Painel → módulo (MQTT) — proposta
+- Tópico: `cttu/modulo/01/comando`
+- Payload: `{"acao": "silenciar"}`, `{"acao": "ativar_som"}` ou `{"acao": "atualizar_trechos"}`
+
+Cobre a parte de "interação" do requisito do dashboard: o painel não só mostra, mas também comanda o módulo.
+
+## 4. Status do módulo (MQTT)
+- Tópico: `cttu/modulo/01/status`, retido: `"online"` ao conectar, `"offline"` (last will) se o módulo cair.
+
+## Esclarecimentos
+- `horas: []` (lista vazia) = o risco vale o dia todo.
+- `ts: 0` = o módulo ainda não sincronizou a hora (sem NTP); use a hora de chegada da mensagem.
+
 ## Perguntas em aberto
 - IP e portas do broker e da API (quem sobe o Docker?)
 - Broker aceita conexão sem usuário e senha?
